@@ -104,6 +104,7 @@ def generate_activation_codes(prefix, existing_codes, count, part):
     return list(generated_codes)
 
 # Retry mechanism for POST requests
+# Asynchronous function to send the POST request
 async def send_request(session, semaphore, activation_code, part):
     global existing_codes, request_count
     retry_attempts = 0
@@ -121,8 +122,14 @@ async def send_request(session, semaphore, activation_code, part):
                         error = meta_data.get("error")
                         message = meta_data.get("message")
                         
+                        # Handle INVALID_AUTH errors (skip saving but track the code)
+                        if error == "INVALID_AUTH":
+                            print(f"Activation code {activation_code} is invalid (INVALID_AUTH), skipping...")
+                            existing_codes.add(activation_code)  # Add to used codes to prevent future duplication
+                            return  # Skip saving this code
+                        
                         # Save valid codes with null error and message
-                        if error is None and message is None:
+                        elif error is None and message is None:
                             filename = f"{activation_code}.json"
                             async with aiofiles.open(filename, "w") as f:
                                 await f.write(json.dumps(response_json, indent=4))
@@ -145,10 +152,12 @@ async def send_request(session, semaphore, activation_code, part):
                                         await f.seek(0)
                                         await f.write(json.dumps(existing_codes_json, indent=4))
                                         await f.truncate()
-                    
+
                     elif 400 <= response.status < 500:
                         print(f"Client Error {response.status} for {activation_code}: skipping.")
+                        existing_codes.add(activation_code)  # Add to used codes even for client errors
                         return
+
                     elif 500 <= response.status < 600:
                         print(f"Server Error {response.status} for {activation_code}: retrying ({retry_attempts + 1}/3)")
                         retry_attempts += 1
@@ -168,7 +177,6 @@ async def send_request(session, semaphore, activation_code, part):
             await asyncio.sleep(5)  # Wait 5 seconds before retrying
     
     request_count += 1
-
 # Main function to run the script
 async def main():
     global current_prefix, existing_codes, request_count
