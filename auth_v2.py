@@ -6,7 +6,6 @@ import os
 import string
 import sys
 from itertools import product
-from collections import deque
 
 # Configuration
 MAX_CONCURRENT_REQUESTS = 40
@@ -33,7 +32,10 @@ result_queue = asyncio.PriorityQueue()
 
 # Function to increment the 5-character alphanumeric prefix
 def increment_prefix(prefix):
-    prefix_as_number = int("".join(str(ord(char) - ord('0')) if char.isdigit() else str(ord(char) - ord('a') + 10) for char in prefix), 36)
+    prefix_as_number = int("".join(
+        str(ord(char) - ord('0')) if char.isdigit() else str(ord(char) - ord('a') + 10)
+        for char in prefix
+    ), 36)
     incremented = prefix_as_number + 1
     new_prefix = ""
     for _ in range(PREFIX_LENGTH):
@@ -90,6 +92,7 @@ if os.path.exists(CODE_NEEDED_FILE):
 else:
     codes_needing_pin = set()
 
+# Generate activation codes, skipping processed ones
 def generate_activation_codes(prefix, existing_codes, count, start_index=0):
     suffix_combinations = product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH)
     generated_codes = []
@@ -108,7 +111,6 @@ def generate_activation_codes(prefix, existing_codes, count, start_index=0):
             break
 
     return generated_codes
-
 
 # Retry mechanism for POST requests
 async def send_request(session, semaphore, activation_code, part, existing_codes, order):
@@ -187,38 +189,47 @@ async def main():
                 continue
 
             progress_file = PROGRESS_FILE_PATTERN.format(part)
-            existing_codes = set()  # Initialize `existing_codes` for each part
-            remaining_codes = 0  # Ensure remaining_codes is always defined
+            existing_codes = set()
+            suffix_combinations = iter(product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH))  # Full suffix iterator
+            start_index = 0
 
             if os.path.exists(progress_file):
                 # Load progress if file exists
                 progress = load_progress(part)
                 current_prefix = progress.get("current_prefix", current_prefix)
                 existing_codes = set(progress.get("existing_codes", []))
+                print(f"Resuming progress for part {part} from prefix {current_prefix}.")
+                print(f"Loaded {len(existing_codes)} existing codes. Current prefix: {current_prefix}.")
+
+                # Find closest match to determine the starting suffix
+                suffix_list = sorted(code[-SUFFIX_LENGTH:] for code in existing_codes if code.startswith(current_prefix))
+                print(f"Analyzing suffixes for prefix '{current_prefix}': {suffix_list[:10]}... (total {len(suffix_list)})")
+
+                if suffix_list:
+                    last_suffix = suffix_list[-1]  # Last known suffix
+                    for i, suffix in enumerate(product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH)):
+                        if ''.join(suffix) == last_suffix:
+                            start_index = i + 1
+                            break
+                    suffix_combinations = iter(list(product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH))[start_index:])
+                    print(f"Closest match to starting suffix '{last_suffix}'. Adjusted starting index to {start_index}.")
             else:
-                # No progress file: calculate starting prefix based on done files
+                # Calculate starting point based on done files
                 completed_parts = sum(1 for p in range(1, part) if os.path.exists(f"done_{current_prefix}_part_{p}.txt"))
                 total_codes_done = completed_parts * CODES_PER_PARTITION
 
-                # Calculate the number of prefixes to skip
                 codes_per_prefix = 36 ** SUFFIX_LENGTH
                 prefixes_to_skip = total_codes_done // codes_per_prefix
-                remaining_codes = total_codes_done % codes_per_prefix
+                start_index = total_codes_done % codes_per_prefix
 
                 print(f"Calculating starting prefix for {current_prefix}. Total codes done: {total_codes_done}.")
-                print(f"Skipping {prefixes_to_skip} prefixes for {total_codes_done} codes. Remaining codes: {remaining_codes}.")
+                print(f"Skipping {prefixes_to_skip} prefixes and starting at index {start_index} for {total_codes_done} codes.")
 
-                # Advance current_prefix by the number of prefixes to skip
                 for _ in range(prefixes_to_skip):
                     current_prefix = increment_prefix(current_prefix)
 
+                suffix_combinations = iter(list(product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH))[start_index:])
                 print(f"Starting from prefix {current_prefix} for part {part} based on done files.")
-
-            # Skip remaining codes within the prefix
-            suffix_combinations = product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH)
-            for _ in range(remaining_codes):
-                next(suffix_combinations, None)
-            remaining_codes = 0  # Clear remaining_codes after skipping
 
             while True:
                 if request_count >= SESSION_RESET_THRESHOLD:
@@ -228,7 +239,6 @@ async def main():
                     print(f"Partition {part} completed for prefix {current_prefix}. Marking as done...")
                     with open(done_file, "w") as f:
                         f.write(f"Processing completed for prefix {current_prefix} and part {part}.")
-
                     if os.path.exists(progress_file):
                         os.remove(progress_file)
 
@@ -238,20 +248,21 @@ async def main():
 
                 # Generate activation codes
                 activation_codes = []
-                for _ in range(NUM_CODES_TO_GENERATE):
-                    try:
+                try:
+                    for _ in range(NUM_CODES_TO_GENERATE):
                         suffix = ''.join(next(suffix_combinations))
                         activation_code = current_prefix + suffix
                         if activation_code not in existing_codes:
                             activation_codes.append(activation_code)
-                    except StopIteration:
-                        break
-
-                if not activation_codes:
+                except StopIteration:
                     print(f"All combinations exhausted for prefix {current_prefix}. Moving to next prefix.")
                     current_prefix = increment_prefix(current_prefix)
-                    suffix_combinations = product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH)
+                    suffix_combinations = iter(product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH))  # Reset iterator
                     continue
+
+                if not activation_codes:
+                    print(f"No more codes to process for prefix {current_prefix}.")
+                    break
 
                 existing_codes.update(activation_codes)
                 print(f"Generating {len(activation_codes)} activation codes for prefix {current_prefix}.")
