@@ -169,13 +169,13 @@ async def send_request(session, semaphore, activation_code, part, existing_codes
 
 # Main function to run the script
 async def main():
-    global request_count
+    global current_prefix, request_count
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     session = await reset_session(None)  # Initialize session
 
     # Initialize current_prefix to default start value
-    current_prefix = "aaaaa"
+    current_prefix = "aaaaa"  # Default starting prefix
 
     async with session:
         for part in range(1, PARTITIONS + 1):
@@ -187,7 +187,8 @@ async def main():
                 continue
 
             progress_file = PROGRESS_FILE_PATTERN.format(part)
-            existing_codes = set()
+            existing_codes = set()  # Initialize `existing_codes` for each part
+            remaining_codes = 0  # Ensure remaining_codes is always defined
 
             if os.path.exists(progress_file):
                 # Load progress if file exists
@@ -213,9 +214,11 @@ async def main():
 
                 print(f"Starting from prefix {current_prefix} for part {part} based on done files.")
 
+            # Skip remaining codes within the prefix
             suffix_combinations = product(ALPHANUMERIC_CHARS, repeat=SUFFIX_LENGTH)
             for _ in range(remaining_codes):
                 next(suffix_combinations, None)
+            remaining_codes = 0  # Clear remaining_codes after skipping
 
             while True:
                 if request_count >= SESSION_RESET_THRESHOLD:
@@ -229,13 +232,7 @@ async def main():
                     if os.path.exists(progress_file):
                         os.remove(progress_file)
 
-                    # Check if this is the last part in the current prefix
-                    if part == PARTITIONS:
-                        print(f"Completed all parts for prefix {current_prefix}. Moving to the next prefix.")
-                        current_prefix = increment_prefix(current_prefix)
-                    else:
-                        print(f"Moving to part {part + 1} within prefix {current_prefix}.")
-
+                    current_prefix = increment_prefix(current_prefix)
                     existing_codes = set()
                     break
 
