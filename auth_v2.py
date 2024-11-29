@@ -11,7 +11,7 @@ from itertools import product
 MAX_CONCURRENT_REQUESTS = 40
 NUM_CODES_TO_GENERATE = 10000  # Generate this many codes at a time
 SLEEP_DURATION = 1  # Sleep duration to avoid hitting rate limits
-URL = "https://apis.fetchtv.com.au/v3/authenticate"
+URL = "https://www-prod.fetchtv.com.au/v3/authenticate"
 USED_PREFIX_FILE_PATTERN = "used_prefix_{}_part_{}.txt"
 PROGRESS_FILE_PATTERN = "progress_part_{}.json"
 CODE_NEEDED_FILE = "code_needed.json"
